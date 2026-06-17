@@ -8,7 +8,7 @@ they have different pupil_detectors installed) and plots overlaid histograms.
 import os, sys, subprocess
 import numpy as np
 
-ROOT = r"c:/Users/adf44/source/python/pupil-detectors"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CUR_PY = ROOT + "/.venv-3dvog/Scripts/python.exe"     # current consolidated branch
 PYPI_PY = ROOT + "/.venv-pypi/Scripts/python.exe"     # pupil-detectors 2.0.2 from PyPI
 SEG = sys.argv[1] if len(sys.argv) > 1 else "frames_2000"

@@ -13,8 +13,9 @@ Run in .venv-3dvog (has torch+monai+transformers + the pupil_detectors wheel).
 """
 import os, sys
 os.add_dll_directory(r"c:/tools/opencv/build/x64/vc16/bin")
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-sys.path.insert(0, r"c:/Users/adf44/source/python/pupil-detectors/.deps/3deepvog")
+sys.path.insert(0, os.path.dirname(__file__))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_ROOT, ".deps", "3deepvog"))
 
 import numpy as np
 import cv2
