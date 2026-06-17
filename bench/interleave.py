@@ -14,7 +14,10 @@ N_ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 # A short timing-only run script fed via stdin.
 SNIPPET = r'''
 import os, time, numpy as np
-os.add_dll_directory(r"c:/tools/opencv/build/x64/vc16/bin")
+for _d in [r"c:/tools/opencv/build/x64/vc16/bin",
+           r"{root}/.deps/opencv5/opencv/build/x64/vc16/bin"]:
+    if os.path.isdir(_d):
+        os.add_dll_directory(_d)
 import sys; sys.path.insert(0, r"{root}/bench")
 from bench import load_frames
 from pupil_detectors import Detector2D

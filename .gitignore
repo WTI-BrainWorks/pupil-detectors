@@ -405,3 +405,6 @@ bench/*.folded
 bench/wheels/
 bench/__pycache__/
 /.venv-pypi/
+/.venv-eigen5/
+/.venv-ocv5/
+/.venv-mem/

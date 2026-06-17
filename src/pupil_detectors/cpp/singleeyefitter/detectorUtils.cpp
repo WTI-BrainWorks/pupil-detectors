@@ -5,6 +5,9 @@
 #include "EllipseDistanceApproxCalculator.h"
 
 #include <opencv2/imgproc.hpp>
+#if defined(CV_VERSION_MAJOR) && CV_VERSION_MAJOR >= 5
+#include <opencv2/geometry.hpp> // fitEllipse moved here in OpenCV 5
+#endif
 #include <vector>
 
 namespace singleeyefitter {

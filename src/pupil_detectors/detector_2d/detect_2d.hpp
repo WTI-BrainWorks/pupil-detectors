@@ -11,6 +11,11 @@ See COPYING and COPYING.LESSER for license details.
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+// OpenCV 5 moved 2D geometry ops (fitEllipse/approxPolyDP/boundingRect/...) out
+// of imgproc into a separate module. Harmless / absent on OpenCV 4.
+#if defined(CV_VERSION_MAJOR) && CV_VERSION_MAJOR >= 5
+#include <opencv2/geometry.hpp>
+#endif
 #include <iostream>
 
 #include "common/types.h"
@@ -42,6 +47,8 @@ private:
 	bool mUse_strong_prior;
 	int mPupil_Size;
 	Ellipse mPrior_ellipse;
+	// reusable per-frame scratch buffers (avoid reallocating image-sized Mats each frame)
+	cv::Mat mPupilImage, mHistogram, mBinaryImg, mSpecMask, mEdges;
 };
 
 void printPoints(std::vector<cv::Point> points)
@@ -74,16 +81,24 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	result->image_width = image.size().width;
 	result->image_height = image.size().height;
 
+	// Reuse image-sized scratch buffers across frames so OpenCV skips the malloc
+	// when the ROI size matches the previous frame. (Each Detector2D is already
+	// stateful and single-threaded per instance, see mPrior_ellipse etc.)
+	cv::Mat &pupil_image = mPupilImage;
+	cv::Mat &histogram = mHistogram;
+	cv::Mat &binary_img = mBinaryImg;
+	cv::Mat &spec_mask = mSpecMask;
+	cv::Mat &edges = mEdges;
+
 	const int image_width = image.size().width;
 	const int image_height = image.size().height;
-	const cv::Mat pupil_image = cv::Mat(image, roi).clone(); // image with roi, copy the image, since we alter it
+	image(roi).copyTo(pupil_image); // image with roi, copy the image, since we alter it
 	const int w = pupil_image.size().width / 2;
 	const float coarse_pupil_width = w / 2.0f;
 	const int padding = int(coarse_pupil_width / 4.0f);
 	const int offset = props.intensity_range;
 	const int spectral_offset = 5;
 
-	cv::Mat histogram;
 	int histSize;
 	histSize = 256; // from 0 to 255
 	/// Set the ranges
@@ -118,8 +133,7 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	static const cv::Mat kernel_7x7 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {7, 7});
 	static const cv::Mat kernel_9x9 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {9, 9});
 
-	// create dark and spectral glint masks
-	cv::Mat binary_img, spec_mask;
+	// create dark and spectral glint masks (binary_img / spec_mask are reusable buffers declared above)
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(lowest_spike_index + props.intensity_range), binary_img); // binary threshold
 	cv::dilate(binary_img, binary_img, kernel_7x7, {-1, -1}, 2);
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(highest_spike_index - spectral_offset), spec_mask); // binary threshold
@@ -134,7 +148,7 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	if (props.blur_size > 1)
 		cv::medianBlur(pupil_image, pupil_image, props.blur_size);
 
-	cv::Mat edges;
+	// edges is a reusable buffer declared above
 	cv::Canny(pupil_image, edges, props.canny_treshold, props.canny_treshold * props.canny_ration, props.canny_aperture);
 
 	// auto edgs_before_spec = "Edges before spec_mask filter";

@@ -13,8 +13,9 @@ import os
 import sys
 import time
 
-# OpenCV C++ runtime DLLs (local build links system OpenCV, not bundled)
-_OPENCV_BIN = r"c:/tools/opencv/build/x64/vc16/bin"
+# OpenCV C++ runtime DLLs (local build links system OpenCV, not bundled).
+# Overridable via PUPIL_OPENCV_BIN for builds linked against a different OpenCV.
+_OPENCV_BIN = os.environ.get("PUPIL_OPENCV_BIN", r"c:/tools/opencv/build/x64/vc16/bin")
 if os.path.isdir(_OPENCV_BIN):
     os.add_dll_directory(_OPENCV_BIN)
 
