@@ -239,7 +239,10 @@ namespace singleeyefitter {
     {
         auto ellipse = cv::fitEllipse(contour);
         EllipseDistCalculator<double> ellipseDistance(toEllipse<double>(ellipse));
-        auto sum_function = [&](cv::Point & point) {return std::pow(std::abs(ellipseDistance(point.x, point.y)), 2.0);};
+        // squared distance: d*d instead of pow(|d|, 2.0) (pow is a real
+        // transcendental call under MSVC /fp:precise; this is hot in the
+        // combinatorial search).
+        auto sum_function = [&](cv::Point & point) {double d = ellipseDistance(point.x, point.y); return d * d;};
         double point_distances = fun::sum(sum_function, contour);
         double fit_variance = point_distances / double(contour.size());
         return fit_variance;

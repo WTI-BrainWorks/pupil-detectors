@@ -525,12 +525,33 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 
 	auto resolve_contour = [&](std::vector<cv::Point> &contour, cv::Mat &edges) -> std::vector<cv::Point>
 	{
-		cv::Mat support_mask(edges.rows, edges.cols, edges.type(), {0, 0, 0});
-		cv::polylines(support_mask, contour, false, {255, 255, 255}, 2);
-		cv::Mat new_edges;
+		// Only the pixels within the contour's bounding box (plus the polyline
+		// thickness margin) can ever be drawn, so restrict the mask + scan to that
+		// sub-rect instead of the whole ROI. findNonZero still returns the same
+		// pixels in the same row-major order (offset back into ROI coordinates).
 		std::vector<cv::Point> new_contours;
-		cv::min(edges, support_mask, new_edges);
-		cv::findNonZero(new_edges, new_contours);
+		if (contour.empty())
+			return new_contours;
+		const int margin = 2; // polylines thickness 2 -> ~1px radius, +1 for safety
+		cv::Rect bb = cv::boundingRect(contour);
+		int x0 = std::max(0, bb.x - margin);
+		int y0 = std::max(0, bb.y - margin);
+		int x1 = std::min(edges.cols, bb.x + bb.width + margin);
+		int y1 = std::min(edges.rows, bb.y + bb.height + margin);
+		cv::Rect sub(x0, y0, x1 - x0, y1 - y0);
+		cv::Point off = sub.tl();
+		cv::Mat support_mask = cv::Mat::zeros(sub.height, sub.width, edges.type());
+		std::vector<cv::Point> shifted(contour.size());
+		for (size_t k = 0; k < contour.size(); ++k)
+			shifted[k] = contour[k] - off;
+		cv::polylines(support_mask, shifted, false, {255, 255, 255}, 2);
+		cv::Mat new_edges;
+		cv::min(edges(sub), support_mask, new_edges);
+		std::vector<cv::Point> local;
+		cv::findNonZero(new_edges, local);
+		new_contours.reserve(local.size());
+		for (auto &p : local)
+			new_contours.push_back(p + off);
 		return new_contours;
 	};
 
@@ -639,23 +660,53 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	// final fitting on resolved contour
 	auto final_fitting = [&](std::vector<std::vector<cv::Point>> &contours, cv::Mat &edges) -> std::vector<cv::Point>
 	{
-		// use the real edge pixels to fit, not the aproximated contours
-		cv::Mat support_mask(edges.rows, edges.cols, edges.type(), {0, 0, 0});
-		cv::polylines(support_mask, contours, false, {255, 255, 255}, 2);
-
-		// draw into the suport mask with thickness 2
-		cv::Mat new_edges;
+		// use the real edge pixels to fit, not the aproximated contours.
+		// Restrict the support mask + scan to the combined bounding box of the
+		// contours (see resolve_contour): the result is identical, just cheaper.
 		std::vector<cv::Point> new_contours;
-		cv::min(edges, support_mask, new_edges);
+		cv::Rect bb;
+		bool have_bb = false;
+		for (auto &c : contours)
+		{
+			if (c.empty())
+				continue;
+			cv::Rect r = cv::boundingRect(c);
+			bb = have_bb ? (bb | r) : r;
+			have_bb = true;
+		}
+		if (!have_bb)
+			return new_contours;
+		const int margin = 2;
+		int x0 = std::max(0, bb.x - margin);
+		int y0 = std::max(0, bb.y - margin);
+		int x1 = std::min(edges.cols, bb.x + bb.width + margin);
+		int y1 = std::min(edges.rows, bb.y + bb.height + margin);
+		cv::Rect sub(x0, y0, x1 - x0, y1 - y0);
+		cv::Point off = sub.tl();
 
-		// can't do this here, because final result gets much distorted.
-		// see if it even can crash !!!
-		// new_edges.at<int>(0,0) = 1; // find zero crashes if it doesn't find one. remove if opencv version is 3.0 or above
-		cv::findNonZero(new_edges, new_contours);
+		cv::Mat support_mask = cv::Mat::zeros(sub.height, sub.width, edges.type());
+		std::vector<std::vector<cv::Point>> shifted(contours.size());
+		for (size_t i = 0; i < contours.size(); ++i)
+		{
+			shifted[i].resize(contours[i].size());
+			for (size_t k = 0; k < contours[i].size(); ++k)
+				shifted[i][k] = contours[i][k] - off;
+		}
+		// draw into the support mask with thickness 2
+		cv::polylines(support_mask, shifted, false, {255, 255, 255}, 2);
+
+		cv::Mat new_edges;
+		cv::min(edges(sub), support_mask, new_edges);
+
+		std::vector<cv::Point> local;
+		cv::findNonZero(new_edges, local);
+		new_contours.reserve(local.size());
+		for (auto &p : local)
+			new_contours.push_back(p + off);
 
 		if (visualize)
 		{
-			cv::Mat overlay = color_image.colRange(roi.x, roi.x + roi.width).rowRange(roi.y, roi.y + roi.height);
+			cv::Mat overlay = color_image.colRange(roi.x + sub.x, roi.x + sub.x + sub.width).rowRange(roi.y + sub.y, roi.y + sub.y + sub.height);
 			cv::Mat g_channel(overlay.rows, overlay.cols, CV_8UC1);
 			cv::Mat b_channel(overlay.rows, overlay.cols, CV_8UC1);
 			cv::Mat r_channel(overlay.rows, overlay.cols, CV_8UC1);
