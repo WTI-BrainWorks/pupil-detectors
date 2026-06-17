@@ -20,7 +20,7 @@ np.save(sys.argv[1], ts*1000.0)
 ''' % SEG
 
 # baseline-equivalent = every excursion toggled off
-BASE = {"PUPIL_BLUR": "median", "PUPIL_OPEN_K": "9", "PUPIL_DILATE_RECT": "0", "PUPIL_PRIOR_ROI": "0"}
+BASE = {"PUPIL_BLUR": "median", "PUPIL_OPEN_K": "9", "PUPIL_DILATE_RECT": "0", "PUPIL_PRIOR_ROI": "0", "PUPIL_MAX_EVALS": "1000"}
 FULL = {}  # defaults = full branch
 
 
