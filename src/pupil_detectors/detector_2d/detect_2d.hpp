@@ -114,20 +114,22 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 		cv::line(color_image, {image_width, (highest_spike_index - spectral_offset) * scale_y}, {int(image_width - 0.5f * scale_x), (highest_spike_index - spectral_offset) * scale_y}, mWhite_color);
 	}
 
+	// Structuring elements are constant across frames, so build them once.
+	static const cv::Mat kernel_7x7 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {7, 7});
+	static const cv::Mat kernel_9x9 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {9, 9});
+
 	// create dark and spectral glint masks
-	cv::Mat binary_img, spec_mask, kernel;
+	cv::Mat binary_img, spec_mask;
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(lowest_spike_index + props.intensity_range), binary_img); // binary threshold
-	kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, {7, 7});
-	cv::dilate(binary_img, binary_img, kernel, {-1, -1}, 2);
+	cv::dilate(binary_img, binary_img, kernel_7x7, {-1, -1}, 2);
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(highest_spike_index - spectral_offset), spec_mask); // binary threshold
-	cv::erode(spec_mask, spec_mask, kernel);
+	cv::erode(spec_mask, spec_mask, kernel_7x7);
 
 	// auto spec_ratio = float(cv::countNonZero(spec_mask)) / float(spec_mask.total());
 	// printf("spec_count=%f ", spec_ratio);
 
-	kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, {9, 9});
 	// open operation to remove eye lashes
-	cv::morphologyEx(pupil_image, pupil_image, cv::MORPH_OPEN, kernel);
+	cv::morphologyEx(pupil_image, pupil_image, cv::MORPH_OPEN, kernel_9x9);
 
 	if (props.blur_size > 1)
 		cv::medianBlur(pupil_image, pupil_image, props.blur_size);
@@ -220,29 +222,49 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 				ellipse = toEllipse<double>(refit_ellipse);
 
 				ellipse_circumference = ellipse.circumference();
-				auto support_pixels_narrow = ellipse_true_support(props, ellipse, ellipse_circumference, raw_edges);
-				auto num_support_pixels_narrow = float(support_pixels_narrow.size());
-				props.ellipse_true_support_min_dist *= 2.;
-				auto support_pixels_wide = ellipse_true_support(props, ellipse, ellipse_circumference, raw_edges);
-				auto num_support_pixels_wide = float(support_pixels_wide.size());
-				props.ellipse_true_support_min_dist /= 2.;
+				// Count narrow- and wide-threshold support in a single pass over the
+				// raw edges. The narrow set (min_dist) is a strict subset of the wide
+				// set (2 * min_dist), so both counts can be accumulated together.
+				// (Previously this ran ellipse_true_support twice, i.e. two passes.)
+				float num_support_pixels_narrow = 0.f;
+				float num_support_pixels_wide = 0.f;
+				{
+					EllipseDistCalculator<double> ellipseDistance(ellipse);
+					const double narrow_dist = props.ellipse_true_support_min_dist;
+					const double wide_dist = 2.0 * narrow_dist;
+					for (auto &p : raw_edges)
+					{
+						double distance = std::abs(ellipseDistance((double)p.x, (double)p.y));
+						if (distance <= wide_dist)
+						{
+							num_support_pixels_wide += 1.f;
+							if (distance <= narrow_dist)
+								num_support_pixels_narrow += 1.f;
+						}
+					}
+				}
 
-				cv::Mat edge_vis;
-				cv::cvtColor(edges, edge_vis, cv::COLOR_GRAY2BGR);
-				// cv::Point roi_offset = cv::Point(roi.x, roi.y);
-				for (cv::Point &p : support_pixels_wide)
+				if (use_debug_image)
 				{
-					edge_vis.at<cv::Vec3b>(p) = cv::Vec3b(0, 0, 255);
+					// debug-only visualization of wide vs narrow support
+					props.ellipse_true_support_min_dist *= 2.;
+					auto support_pixels_wide = ellipse_true_support(props, ellipse, ellipse_circumference, raw_edges);
+					props.ellipse_true_support_min_dist /= 2.;
+					auto support_pixels_narrow = ellipse_true_support(props, ellipse, ellipse_circumference, raw_edges);
+					cv::Mat edge_vis;
+					cv::cvtColor(edges, edge_vis, cv::COLOR_GRAY2BGR);
+					for (cv::Point &p : support_pixels_wide)
+					{
+						edge_vis.at<cv::Vec3b>(p) = cv::Vec3b(0, 0, 255);
+					}
+					for (cv::Point &p : support_pixels_narrow)
+					{
+						edge_vis.at<cv::Vec3b>(p) = cv::Vec3b(0, 255, 0);
+					}
+					cv::Mat edge_vis_big;
+					cv::resize(edge_vis, edge_vis_big, cv::Size(), 2.0, 2.0);
+					// cv::imshow("Edges vs wide support vs narrow support", edge_vis_big);
 				}
-				for (cv::Point &p : support_pixels_narrow)
-				{
-					edge_vis.at<cv::Vec3b>(p) = cv::Vec3b(0, 255, 0);
-				}
-				auto label_support = "Edges vs wide support vs narrow support";
-				cv::Mat edge_vis_big;
-				cv::resize(edge_vis, edge_vis_big, cv::Size(), 2.0, 2.0);
-				// cv::imshow(label_support, edge_vis_big);
-				// cv::moveWindow(label_support, 4500, 100);
 
 				float narrow_wide_ratio = num_support_pixels_narrow / num_support_pixels_wide;
 				float narrow_circum_ratio = num_support_pixels_narrow / float(ellipse_circumference);

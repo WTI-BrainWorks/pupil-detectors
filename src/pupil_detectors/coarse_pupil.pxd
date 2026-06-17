@@ -64,52 +64,74 @@ cdef inline eye_t make_eye(int h) nogil:
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
+@cython.cdivision(True)
 cdef inline center_surround(int[:,::1] img, int min_w,int max_w):
-    cdef point_t img_size
-    img_size.r =  img.shape[0]
-    img_size.c =  img.shape[1]
+    cdef int rows = img.shape[0]
+    cdef int cols = img.shape[1]
     cdef int min_h = min_w // 3
     cdef int max_h = max_w // 3
-    cdef int h=0, i=0, j=0
+    cdef int h=0, i=0, j=0, w=0
     cdef float best_response = -10000
-    cdef point_t best_pos
-    cdef int best_h = 0
     cdef int h_step = 4
     cdef int step = 5
-    cdef eye_t eye
-    cdef point_t offset
-    cdef int x_pos,y_pos,width
     cdef float response = 0
-    cdef float a,c,
-    cdef point_t b,d,e,f
+    cdef float outer_f = 0, inner_f = 0
+    cdef int outer_area, inner_area
+    cdef int i_w, i_h, i_2h
 
+    # Raw pointer + row stride for the (C-contiguous) integral image. This avoids
+    # the per-access memoryview machinery and the by-value struct copies that the
+    # original `area()` helper incurred for every one of the millions of probes.
+    cdef int* base = &img[0, 0]
+    cdef int stride = cols
+
+    # Ring buffer holding the last 30 "record-improving" candidates, matching the
+    # original list semantics (append on each new best, drop oldest beyond 30).
+    cdef int CAP = 30
+    cdef int rb_j[30]
+    cdef int rb_i[30]
+    cdef int rb_w[30]
+    cdef float rb_r[30]
+    cdef int rb_start = 0
+    cdef int rb_len = 0
+    cdef int slot
+
+    with nogil:
+      for h from min_h <= h < max_h by h_step:
+        w = 3 * h
+        outer_f = 1.0 / (w * w)
+        inner_f = -1.0 / (h * h)
+        for i from 0 <= i < rows - w by step:
+          i_w = (i + w) * stride
+          i_h = (i + h) * stride
+          i_2h = (i + 2 * h) * stride
+          for j from 0 <= j < cols - w by step:
+            outer_area = base[i_w + j + w] + base[i * stride + j] \
+                       - base[i * stride + j + w] - base[i_w + j]
+            inner_area = base[i_2h + j + 2 * h] + base[i_h + j + h] \
+                       - base[i_h + j + 2 * h] - base[i_2h + j + h]
+            response = outer_f * outer_area + inner_f * inner_area
+            if response > best_response:
+              best_response = response
+              slot = (rb_start + rb_len) % CAP
+              if rb_len < CAP:
+                rb_len = rb_len + 1
+              else:
+                rb_start = (rb_start + 1) % CAP
+              rb_j[slot] = j
+              rb_i[slot] = i
+              rb_w[slot] = h * 3
+              rb_r[slot] = response
+
+    # Rebuild the Python results list from the ring buffer in chronological order.
     cdef list results = []
-
-    #for h in prange(min_h,max_h,h_step):
-    for h from min_h <= h < max_h by h_step:
-      eye = make_eye(h)
-      #for i in range(0,img_size.r-eye.w,step): #step is slow
-      for i from 0 <= i < img_size.r-eye.w by step:
-        #for j in range(0,img_size.c-eye.w,step): #step is slow
-        for j from 0 <= j < img_size.c-eye.w by step:
-
-          offset.r = i
-          offset.c = j
-
-          response = eye.outer.f*area(img,img_size,eye.outer.s,eye.outer.e,offset) + eye.inner.f*area(img,img_size,eye.inner.s,eye.inner.e,offset)
-          if(response  > best_response):
-            best_response = response
-            best_pos.r = i
-            best_pos.c = j
-            best_h = h
-            results.append( (j ,i, h * 3 ,  response) )
-            if len(results) > 30:
-                results.pop(0)
-
+    for slot from 0 <= slot < rb_len:
+        i = (rb_start + slot) % CAP
+        results.append((rb_j[i], rb_i[i], rb_w[i], rb_r[i]))
 
     #remove results which fully surround others, since we want the smalles ones
     cdef list bad = []
-    cdef int x,y,w,x2,y2,w2
+    cdef int x,y,x2,y2,w2
     cdef float response2
 
     bad = results[:]

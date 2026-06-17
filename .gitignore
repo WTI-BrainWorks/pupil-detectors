@@ -392,3 +392,15 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode,macos,windows,linux,pycharm
+
+# --- performance work (local build deps, sample data, benchmark artifacts) ---
+/.deps/
+/sample_data/
+/.venv-bench/
+/.venv-build311/
+bench/*.raw
+bench/*.npz
+bench/*.svg
+bench/*.folded
+bench/wheels/
+bench/__pycache__/
