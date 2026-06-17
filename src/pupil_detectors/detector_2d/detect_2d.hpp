@@ -79,10 +79,10 @@ std::vector<cv::Point> Detector2D::ellipse_true_support(Detector2DProperties &pr
 	std::vector<cv::Point> support_pixels;
 	EllipseDistCalculator<double> ellipseDistance(ellipse);
 
+	// sqrt-free threshold test (see EllipseDistCalculator::within)
 	for (auto &p : raw_edges)
 	{
-		double distance = std::abs(ellipseDistance((double)p.x, (double)p.y));
-		if (distance <= props.ellipse_true_support_min_dist)
+		if (ellipseDistance.within((double)p.x, (double)p.y, props.ellipse_true_support_min_dist))
 		{
 			support_pixels.emplace_back(p);
 		}
@@ -328,13 +328,20 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 					EllipseDistCalculator<double> ellipseDistance(ellipse);
 					const double narrow_dist = props.ellipse_true_support_min_dist;
 					const double wide_dist = 2.0 * narrow_dist;
+					// sqrt-free: compute the squared mapped distance once per point
+					// and test it against the (precomputed, squared) narrow/wide bands.
+					const double r = ellipseDistance.radius();
+					const double w_hi = (r + wide_dist) * (r + wide_dist);
+					const double w_lo = r - wide_dist, w_lo2 = w_lo * w_lo;
+					const double n_hi = (r + narrow_dist) * (r + narrow_dist);
+					const double n_lo = r - narrow_dist, n_lo2 = n_lo * n_lo;
 					for (auto &p : raw_edges)
 					{
-						double distance = std::abs(ellipseDistance((double)p.x, (double)p.y));
-						if (distance <= wide_dist)
+						double s = ellipseDistance.norm2((double)p.x, (double)p.y);
+						if (s <= w_hi && (w_lo <= 0.0 || s >= w_lo2))
 						{
 							num_support_pixels_wide += 1.f;
-							if (distance <= narrow_dist)
+							if (s <= n_hi && (n_lo <= 0.0 || s >= n_lo2))
 								num_support_pixels_narrow += 1.f;
 						}
 					}
