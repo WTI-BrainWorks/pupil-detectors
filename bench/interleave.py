@@ -36,8 +36,20 @@ print("STATS %.4f %.4f %.4f %.4f %.4f %.4f" % (
 KEYS = ["med", "mean", "p90", "p95", "p99", "pct_gt1"]
 
 
-def one(py):
-    out = subprocess.run([py, "-c", SNIPPET], capture_output=True, text=True)
+def _env(spec):
+    e = dict(os.environ)
+    for kv in spec.split(",") if spec else []:
+        if "=" in kv:
+            k, v = kv.split("=", 1); e[k] = v
+    return e
+
+
+REF_ENV = _env(os.environ.get("REF_ENV", ""))
+CAND_ENV = _env(os.environ.get("CAND_ENV", ""))
+
+
+def one(py, env):
+    out = subprocess.run([py, "-c", SNIPPET], capture_output=True, text=True, env=env)
     m = re.search(r"STATS " + " ".join([r"([\d.]+)"]*6), out.stdout)
     if not m:
         print("ERR:", out.stdout, out.stderr[-800:]); sys.exit(1)
@@ -48,9 +60,9 @@ ref = {k: [] for k in KEYS}
 cand = {k: [] for k in KEYS}
 for r in range(N_ROUNDS):
     if r % 2 == 0:
-        a = one(REF_PY); b = one(CAND_PY)
+        a = one(REF_PY, REF_ENV); b = one(CAND_PY, CAND_ENV)
     else:
-        b = one(CAND_PY); a = one(REF_PY)
+        b = one(CAND_PY, CAND_ENV); a = one(REF_PY, REF_ENV)
     for k in KEYS:
         ref[k].append(a[k]); cand[k].append(b[k])
     print(f"round {r}: ref med={a['med']:.3f} p95={a['p95']:.3f} p99={a['p99']:.3f} >1ms={a['pct_gt1']:.0f}% "
