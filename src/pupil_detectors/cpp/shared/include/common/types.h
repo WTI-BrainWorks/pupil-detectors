@@ -207,6 +207,7 @@ namespace singleeyefitter {
         float ellipse_true_support_min_dist;
         float support_pixel_ratio_exponent;
         int combine_evals_max;
+        int use_blob_fallback;
 
     };
 

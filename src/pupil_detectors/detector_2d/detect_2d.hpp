@@ -428,6 +428,63 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	const cv::Rect ellipse_center_varianz = cv::Rect(padding, padding, pupil_image.size().width - 2.0 * padding, pupil_image.size().height - 2.0 * padding);
 	const EllipseEvaluation2D is_Ellipse(ellipse_center_varianz, props.ellipse_roundness_ratio, props.pupil_size_min, props.pupil_size_max);
 
+	// Structural fallback for when the edge -> contour -> combinatorial path can't
+	// reassemble a supported ellipse (the dominant remaining failure: a large
+	// dilated pupil with a central IR glint fragments the boundary into arcs).
+	// The dark-intensity *region* does not fragment under a glint, so fit the
+	// ellipse directly to the largest dark blob (segmentation-then-fit, like the
+	// CNN). Confidence = fraction of the fitted ellipse filled by the dark mask.
+	auto blob_fallback = [&]() -> bool {
+		if (!props.use_blob_fallback)
+			return false;
+		cv::Mat dark;
+		// threshold the unmodified ROI (pupil_image has been opened/blurred)
+		cv::inRange(image(roi), cv::Scalar(0), cv::Scalar(lowest_spike_index + props.intensity_range), dark);
+		cv::morphologyEx(dark, dark, cv::MORPH_CLOSE, kernel_open_5x5); // bridge the glint hole
+		std::vector<std::vector<cv::Point>> blob_contours;
+		cv::findContours(dark, blob_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_NONE);
+		if (blob_contours.empty())
+			return false;
+		auto &best = *std::max_element(blob_contours.begin(), blob_contours.end(),
+									   [](const std::vector<cv::Point> &a, const std::vector<cv::Point> &b)
+									   { return cv::contourArea(a) < cv::contourArea(b); });
+		if (best.size() < 5)
+			return false;
+		cv::RotatedRect rr = cv::fitEllipse(best);
+		if (!is_Ellipse(rr))
+			return false;
+		// solidity gate: the fitted ellipse must be mostly filled by the dark
+		// mask (rejects thin/crescent eyelid blobs that still fit an ellipse).
+		cv::Mat emask = cv::Mat::zeros(dark.size(), CV_8UC1);
+		cv::ellipse(emask, rr, cv::Scalar(255), -1);
+		cv::bitwise_and(dark, emask, emask);
+		double area = rr.size.width * rr.size.height * (CV_PI / 4.0);
+		double fill = area > 1.0 ? cv::countNonZero(emask) / area : 0.0;
+		if (fill < 0.75) // solid disc; partial-blink crescents fill an ellipse poorly
+			return false;
+		// confidence from edge support (same metric as the normal path): edge
+		// points near the fitted ellipse. A glint-fragmented real pupil still has
+		// most of its boundary in raw_edges (fragmentation only defeats the
+		// *combinatorial* reassembly), whereas a spurious dark blob has almost
+		// none -> it scores low and is filtered by the caller's conf threshold.
+		Ellipse ellipse = toEllipse<double>(rr);
+		double circ = ellipse.circumference();
+		std::vector<cv::Point> support = ellipse_true_support(props, ellipse, circ, raw_edges);
+		double support_ratio = circ > 1.0 ? support.size() / circ : 0.0;
+		mPupil_Size = rr.size.height;
+		double diameter = ellipse.major_radius * 2.0;
+		double goodness = std::min(0.99, support_ratio) * size_consistency(diameter);
+		update_recent_size(diameter, goodness);
+		ellipse.center[0] += roi.x;
+		ellipse.center[1] += roi.y;
+		mPrior_ellipse = ellipse;
+		mUse_strong_prior = true;
+		result->ellipse = ellipse;
+		result->confidence = goodness;
+		result->raw_edges = std::move(raw_edges);
+		return true;
+	};
+
 	// finding potential candidates for ellipse seeds that describe the pupil.
 	auto seed_contours = detector::divide_strong_and_weak_contours(
 		split_contours, is_Ellipse, props.initial_ellipse_fit_treshhold,
@@ -443,11 +500,9 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	// still empty ? --> exits
 	if (seed_indices.empty())
 	{
+		if (blob_fallback())
+			return result;
 		result->confidence = 0.0;
-		// Does it make seens to return anything ?
-		// result->ellipse = toEllipse<double>(refit_ellipse);
-		// result->final_contours = std::move(best_contours);
-		// result->contours = std::move(split_contours);
 		result->raw_edges = std::move(raw_edges);
 		return result;
 	}
@@ -698,12 +753,10 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 
 	if (index_best_Solution == -1)
 	{
-		// no good final ellipse found
+		// no good final ellipse from the contour path -> try the dark-blob fit
+		if (blob_fallback())
+			return result;
 		result->confidence = 0.0;
-		// Does it make seens to return anything ?
-		// result->ellipse = toEllipse<double>(refit_ellipse);
-		// result->final_contours = std::move(best_contours);
-		// result->contours = std::move(split_contours);
 		result->raw_edges = std::move(raw_edges);
 		return result;
 	}

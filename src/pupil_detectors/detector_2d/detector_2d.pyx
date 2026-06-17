@@ -75,6 +75,10 @@ cdef class Detector2DCore(DetectorBase):
             # Bounds the latency tail on fragmented (e.g. blink) frames; the
             # original value was 1000. See detect_2d.hpp.
             "combine_evals_max": 100,
+            # Structural fallback: when the edge/contour path fails, fit the
+            # ellipse to the largest dark blob (robust to glint-fragmented
+            # boundaries). 0 disables.
+            "use_blob_fallback": 1,
             # Skip coarse detection while tracking is locked on, seeding a tight
             # ROI from the previous confident result (falls back to coarse when
             # tracking is lost). Set False for pure random-access detection.
