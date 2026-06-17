@@ -178,11 +178,27 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	static const int open_shape = []() { const char *e = std::getenv("PUPIL_OPEN_RECT"); return (e && std::string(e) == "1") ? cv::MORPH_RECT : cv::MORPH_ELLIPSE; }();
 	static const cv::Mat open_kernel = open_k > 0 ? cv::getStructuringElement(open_shape, {open_k, open_k}) : cv::Mat();
 
+	// Dark-mask dilation (grows the dark-pupil mask so the boundary edge survives
+	// the later min(edges, binary_img)) and spec-mask erosion. The dilate kernel
+	// now defaults to a *rectangular* structuring element: dilation with a rect
+	// kernel is separable (~O(2k) vs O(k^2) for the ellipse), giving ~1.2x on the
+	// mask stage with byte-identical detection/center vs the 3DeepVOG gold on both
+	// clean and blink footage. Configurable: PUPIL_DILATE_K / _ITER / _RECT(=0 for
+	// the old ellipse) and PUPIL_ERODE_K.
+	static const int dilate_k = []() { const char *e = std::getenv("PUPIL_DILATE_K"); return e ? std::atoi(e) : 7; }();
+	static const int dilate_iter = []() { const char *e = std::getenv("PUPIL_DILATE_ITER"); return e ? std::atoi(e) : 2; }();
+	static const int dilate_shape = []() { const char *e = std::getenv("PUPIL_DILATE_RECT"); return (!e || std::string(e) == "1") ? cv::MORPH_RECT : cv::MORPH_ELLIPSE; }();
+	static const int erode_k = []() { const char *e = std::getenv("PUPIL_ERODE_K"); return e ? std::atoi(e) : 7; }();
+	static const cv::Mat dilate_kernel = dilate_iter > 0 ? cv::getStructuringElement(dilate_shape, {dilate_k, dilate_k}) : cv::Mat();
+	static const cv::Mat erode_kernel = erode_k > 0 ? cv::getStructuringElement(cv::MORPH_ELLIPSE, {erode_k, erode_k}) : cv::Mat();
+
 	// create dark and spectral glint masks (binary_img / spec_mask are reusable buffers declared above)
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(lowest_spike_index + props.intensity_range), binary_img); // binary threshold
-	cv::dilate(binary_img, binary_img, kernel_7x7, {-1, -1}, 2);
+	if (dilate_iter > 0)
+		cv::dilate(binary_img, binary_img, dilate_kernel, {-1, -1}, dilate_iter);
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(highest_spike_index - spectral_offset), spec_mask); // binary threshold
-	cv::erode(spec_mask, spec_mask, kernel_7x7);
+	if (erode_k > 0)
+		cv::erode(spec_mask, spec_mask, erode_kernel);
 
 	// auto spec_ratio = float(cv::countNonZero(spec_mask)) / float(spec_mask.total());
 	// printf("spec_count=%f ", spec_ratio);
