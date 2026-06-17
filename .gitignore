@@ -408,3 +408,5 @@ bench/__pycache__/
 /.venv-eigen5/
 /.venv-ocv5/
 /.venv-mem/
+/.venv-3dvog/
+bench/compare_frames/
