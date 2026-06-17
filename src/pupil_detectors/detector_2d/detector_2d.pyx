@@ -36,6 +36,9 @@ cdef class Detector2DCore(DetectorBase):
 
     def __cinit__(self, *args, **kwargs):
         self.thisptr = new Detector2D()
+        self._have_prev = False
+        import os as _os
+        self._prior_roi = _os.environ.get("PUPIL_PRIOR_ROI", "1") != "0"
 
     def __dealloc__(self):
         del self.thisptr
@@ -144,14 +147,56 @@ cdef class Detector2DCore(DetectorBase):
             color_img_data = color_img
             frameColor = Mat(image_height, image_width, CV_8UC3, <void *> &color_img_data[0, 0, 0])
 
-        if roi is None:
-            roi = Roi.from_rect(0, 0, image_width, image_height)
-
         cdef int[:, ::1] integral
 
+        # Prior-seeded ROI: while we are locked on, coarse detection (integral +
+        # center_surround, ~23% of detect time) is redundant -- the previous
+        # confident result already tells us where the pupil is. Seed a tight ROI
+        # from it and skip coarse; fall back to a full-frame (coarse) detect if
+        # the result comes back weak (e.g. a saccade moved the pupil out of view).
+        # An explicit caller-supplied roi always overrides this.
+        cdef bint prior_mode = False
+        cdef double m
+        if roi is None and self._prior_roi and self.properties['coarse_detection'] and self._have_prev:
+            m = self._prev_diam * 0.7
+            if m < 55.0:
+                m = 55.0
+            roi = Roi(
+                max(0, <int>(self._prev_cx - m)),
+                max(0, <int>(self._prev_cy - m)),
+                min(image_width - 1, <int>(self._prev_cx + m)),
+                min(image_height - 1, <int>(self._prev_cy + m)),
+            )
+            prior_mode = True
+        elif roi is None:
+            roi = Roi.from_rect(0, 0, image_width, image_height)
+
+        cppResultPtr = self._detect_in_roi(roi, frame_image, frameColor, debug_image,
+                                           should_visualize, color_img, gray_img)
+
+        # tracking lost in the tight ROI -> relocate with a full-frame coarse pass
+        if prior_mode and deref(cppResultPtr).confidence < 0.34:
+            roi = Roi.from_rect(0, 0, image_width, image_height)
+            cppResultPtr = self._detect_in_roi(roi, frame_image, frameColor, debug_image,
+                                               should_visualize, color_img, gray_img)
+
+        # update tracking state from the (absolute-coordinate) result
+        if deref(cppResultPtr).confidence > 0.6:
+            self._prev_cx = deref(cppResultPtr).ellipse.center[0]
+            self._prev_cy = deref(cppResultPtr).ellipse.center[1]
+            self._prev_diam = deref(cppResultPtr).ellipse.major_radius * 2.0
+            self._have_prev = True
+        else:
+            self._have_prev = False
+
+        return cppResultPtr
+
+    cdef shared_ptr[Detector2DResult] _detect_in_roi(self, roi, Mat frame_image,
+                                                     Mat frameColor, Mat debug_image,
+                                                     should_visualize, color_img, gray_img):
+        cdef int[:, ::1] integral
         if self.properties['coarse_detection'] and roi.width * roi.height > 320 * 240:
             scale = 2 # half the integral image. boost up integral
-            # TODO maybe implement our own Integral so we don't have to half the image
             user_roi_image = gray_img[roi.slices]
             integral = cv2.integral(user_roi_image[::scale,::scale])
             coarse_filter_max = self.properties['coarse_filter_max']
@@ -187,7 +232,7 @@ cdef class Detector2DCore(DetectorBase):
             )
 
         # every coordinates in the result are relative to the current ROI
-        cppResultPtr = self.thisptr.detect(
+        return self.thisptr.detect(
             self.properties,
             frame_image,
             frameColor,
@@ -196,8 +241,6 @@ cdef class Detector2DCore(DetectorBase):
             should_visualize,
             False
         )
-
-        return cppResultPtr
 
 
 cdef object result2D_to_dict(Detector2DResult& result):

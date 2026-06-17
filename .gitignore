@@ -410,3 +410,4 @@ bench/__pycache__/
 /.venv-mem/
 /.venv-3dvog/
 bench/compare_*/
+bench/tw_*.npy

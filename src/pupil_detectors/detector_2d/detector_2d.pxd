@@ -11,12 +11,17 @@ See COPYING and COPYING.LESSER for license details.
 """
 from libcpp.memory cimport shared_ptr
 
-from ..c_types_wrapper cimport Detector2D, Detector2DResult
+from ..c_types_wrapper cimport Detector2D, Detector2DResult, Mat
 from ..detector_base cimport DetectorBase
 
 
 cdef class Detector2DCore(DetectorBase):
     cdef dict properties
     cdef Detector2D* thisptr
+    # prior-seeded ROI tracking state (skip coarse detection while locked on)
+    cdef bint _have_prev
+    cdef bint _prior_roi
+    cdef double _prev_cx, _prev_cy, _prev_diam
 
     cdef shared_ptr[Detector2DResult] c_detect(self, gray_img, color_img=*, roi=*)
+    cdef shared_ptr[Detector2DResult] _detect_in_roi(self, roi, Mat frame_image, Mat frameColor, Mat debug_image, should_visualize, color_img, gray_img)
