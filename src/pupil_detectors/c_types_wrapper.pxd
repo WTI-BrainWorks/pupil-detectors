@@ -86,6 +86,7 @@ cdef extern from 'common/types.h':
         float final_perimeter_ratio_range_max
         float ellipse_true_support_min_dist
         float support_pixel_ratio_exponent
+        int combine_evals_max
 
 cdef extern from 'detect_2d.hpp':
 

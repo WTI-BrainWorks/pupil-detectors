@@ -20,7 +20,6 @@ cdef class Detector2DCore(DetectorBase):
     cdef Detector2D* thisptr
     # prior-seeded ROI tracking state (skip coarse detection while locked on)
     cdef bint _have_prev
-    cdef bint _prior_roi
     cdef double _prev_cx, _prev_cy, _prev_diam
 
     cdef shared_ptr[Detector2DResult] c_detect(self, gray_img, color_img=*, roi=*)

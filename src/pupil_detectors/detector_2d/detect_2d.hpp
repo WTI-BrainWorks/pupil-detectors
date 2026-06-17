@@ -67,11 +67,10 @@ Detector2D::Detector2D() : mUse_strong_prior(false), mPupil_Size(100), mRecentPu
 	// The detector works on small per-frame ROIs. OpenCV's internal thread-pool
 	// dispatch (PPL on the Windows prebuilt) costs far more than the parallelism
 	// saves at this size and is a major source of latency-tail jitter -- running
-	// OpenCV single-threaded here is ~1.7x faster and bit-identical. This only
-	// affects the OpenCV instance linked by this extension, not a caller's cv2.
-	// Override with the PUPIL_CV_THREADS env var if desired.
-	const char *t = std::getenv("PUPIL_CV_THREADS");
-	cv::setNumThreads(t ? std::atoi(t) : 1);
+	// OpenCV single-threaded here is ~1.7x faster and bit-identical. This sets the
+	// thread count only for the OpenCV instance linked by this extension; it does
+	// not affect a caller's own cv2 (a separate OpenCV instance).
+	cv::setNumThreads(1);
 };
 
 std::vector<cv::Point> Detector2D::ellipse_true_support(Detector2DProperties &props, Ellipse &ellipse, double ellipse_circumference, std::vector<cv::Point> &raw_edges)
@@ -167,68 +166,28 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	}
 
 	// Structuring elements are constant across frames, so build them once.
-	static const cv::Mat kernel_7x7 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {7, 7});
-	// MORPH_OPEN (eyelash removal). The original 9x9 was oversized now that a
-	// Gaussian denoise + the dark-mask filtering precede edge detection: vs the
-	// 3DeepVOG gold standard a 5x5 ellipse is faster with equal-or-better
-	// detection and center agreement on both clean and blink footage. Kept
-	// configurable: PUPIL_OPEN_K sets the size (0 disables), PUPIL_OPEN_RECT=1
-	// uses a separable rectangular kernel.
-	static const int open_k = []() { const char *e = std::getenv("PUPIL_OPEN_K"); return e ? std::atoi(e) : 5; }();
-	static const int open_shape = []() { const char *e = std::getenv("PUPIL_OPEN_RECT"); return (e && std::string(e) == "1") ? cv::MORPH_RECT : cv::MORPH_ELLIPSE; }();
-	static const cv::Mat open_kernel = open_k > 0 ? cv::getStructuringElement(open_shape, {open_k, open_k}) : cv::Mat();
-
-	// Dark-mask dilation (grows the dark-pupil mask so the boundary edge survives
-	// the later min(edges, binary_img)) and spec-mask erosion. The dilate kernel
-	// now defaults to a *rectangular* structuring element: dilation with a rect
-	// kernel is separable (~O(2k) vs O(k^2) for the ellipse), giving ~1.2x on the
-	// mask stage with byte-identical detection/center vs the 3DeepVOG gold on both
-	// clean and blink footage. Configurable: PUPIL_DILATE_K / _ITER / _RECT(=0 for
-	// the old ellipse) and PUPIL_ERODE_K.
-	static const int dilate_k = []() { const char *e = std::getenv("PUPIL_DILATE_K"); return e ? std::atoi(e) : 7; }();
-	static const int dilate_iter = []() { const char *e = std::getenv("PUPIL_DILATE_ITER"); return e ? std::atoi(e) : 2; }();
-	static const int dilate_shape = []() { const char *e = std::getenv("PUPIL_DILATE_RECT"); return (!e || std::string(e) == "1") ? cv::MORPH_RECT : cv::MORPH_ELLIPSE; }();
-	static const int erode_k = []() { const char *e = std::getenv("PUPIL_ERODE_K"); return e ? std::atoi(e) : 7; }();
-	static const cv::Mat dilate_kernel = dilate_iter > 0 ? cv::getStructuringElement(dilate_shape, {dilate_k, dilate_k}) : cv::Mat();
-	static const cv::Mat erode_kernel = erode_k > 0 ? cv::getStructuringElement(cv::MORPH_ELLIPSE, {erode_k, erode_k}) : cv::Mat();
+	// kernel_dilate is rectangular: rect dilation is separable (~O(2k) vs O(k^2)
+	// for an ellipse), ~1.2x cheaper with byte-identical results here. The open
+	// kernel was reduced 9x9 -> 5x5 (the 9x9 was oversized once a Gaussian
+	// denoise + the dark masks precede edge detection). Both validated vs the
+	// 3DeepVOG gold standard (clean + blink): faster, detection/center unchanged.
+	static const cv::Mat kernel_dilate_7x7 = cv::getStructuringElement(cv::MORPH_RECT, {7, 7});
+	static const cv::Mat kernel_erode_7x7 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {7, 7});
+	static const cv::Mat kernel_open_5x5 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {5, 5});
 
 	// create dark and spectral glint masks (binary_img / spec_mask are reusable buffers declared above)
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(lowest_spike_index + props.intensity_range), binary_img); // binary threshold
-	if (dilate_iter > 0)
-		cv::dilate(binary_img, binary_img, dilate_kernel, {-1, -1}, dilate_iter);
+	cv::dilate(binary_img, binary_img, kernel_dilate_7x7, {-1, -1}, 2);
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(highest_spike_index - spectral_offset), spec_mask); // binary threshold
-	if (erode_k > 0)
-		cv::erode(spec_mask, spec_mask, erode_kernel);
-
-	// auto spec_ratio = float(cv::countNonZero(spec_mask)) / float(spec_mask.total());
-	// printf("spec_count=%f ", spec_ratio);
+	cv::erode(spec_mask, spec_mask, kernel_erode_7x7);
 
 	// open operation to remove eye lashes
-	if (open_k > 0)
-		cv::morphologyEx(pupil_image, pupil_image, cv::MORPH_OPEN, open_kernel);
+	cv::morphologyEx(pupil_image, pupil_image, cv::MORPH_OPEN, kernel_open_5x5);
 
-	// Denoise before edge detection. A separable Gaussian is ~1.3x faster than
-	// medianBlur(5) here (median was the single most expensive preprocessing op),
-	// recovers a few frames the median over-smoothed (slightly higher detection
-	// rate), and agrees comparably with the 3DeepVOG gold standard. Default to
-	// gaussian; PUPIL_BLUR=median|box|none allows reverting / experimenting.
-	static const int blur_mode = []() {
-		const char *b = std::getenv("PUPIL_BLUR");
-		if (!b) return 0; // default: gaussian
-		std::string s(b);
-		return s == "median" ? 1 : s == "box" ? 2 : s == "none" ? 3 : 0;
-	}();
+	// denoise before edge detection (separable Gaussian; ~1.3x cheaper than the
+	// original medianBlur(5) with equal-or-better agreement vs the gold standard)
 	if (props.blur_size > 1)
-	{
-		if (blur_mode == 1)
-			cv::medianBlur(pupil_image, pupil_image, props.blur_size);
-		else if (blur_mode == 2)
-			cv::blur(pupil_image, pupil_image, {props.blur_size, props.blur_size});
-		else if (blur_mode == 3)
-			; // no blur
-		else
-			cv::GaussianBlur(pupil_image, pupil_image, {props.blur_size, props.blur_size}, 0);
-	}
+		cv::GaussianBlur(pupil_image, pupil_image, {props.blur_size, props.blur_size}, 0);
 
 	// edges is a reusable buffer declared above
 	cv::Canny(pupil_image, edges, props.canny_treshold, props.canny_treshold * props.canny_ration, props.canny_aperture);
@@ -591,16 +550,14 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 		return results;
 	};
 	std::set<int> seed_indices_set = std::set<int>(seed_indices.begin(), seed_indices.end());
-	// Cap the combinatorial contour-combination search. The latency tail is
-	// entirely full-path frames with fragmented edges -> many contour segments ->
-	// a blow-up in the number of candidate solutions (time correlates ~0.8 with
-	// solution count). The original cap of 1000 let a messy/blink frame evaluate
-	// 100+ solutions and spike to >20 ms. Capping at 100 brings the worst-case
-	// frame under the 120fps budget (~24 -> ~6 ms, p99 ~4.5 -> ~3 ms) with no
-	// change in detection or center agreement vs the 3DeepVOG gold standard on
-	// either clean or blink footage. Tunable via PUPIL_MAX_EVALS.
-	static const int max_evals = []() { const char *e = std::getenv("PUPIL_MAX_EVALS"); return e ? std::atoi(e) : 100; }();
-	std::vector<std::set<int>> solutions = pruning_quick_combine(split_contours, seed_indices_set, max_evals, 5);
+	// Cap the combinatorial contour-combination search (props.combine_evals_max,
+	// default 100). The latency tail is entirely full-path frames with fragmented
+	// edges -> many contour segments -> a blow-up in candidate solutions (time
+	// correlates ~0.8 with solution count); the original uncapped-ish 1000 let a
+	// messy/blink frame evaluate 100+ solutions and spike >20 ms. Capping at 100
+	// brings the worst-case frame under the 120fps budget (~24 -> ~6 ms) with no
+	// change in detection/center agreement vs the 3DeepVOG gold standard.
+	std::vector<std::set<int>> solutions = pruning_quick_combine(split_contours, seed_indices_set, props.combine_evals_max, 5);
 
 	// find largest sets which contains all previous ones
 	auto filter_subset = [](std::vector<std::set<int>> &sets)

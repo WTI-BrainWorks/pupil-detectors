@@ -37,8 +37,6 @@ cdef class Detector2DCore(DetectorBase):
     def __cinit__(self, *args, **kwargs):
         self.thisptr = new Detector2D()
         self._have_prev = False
-        import os as _os
-        self._prior_roi = _os.environ.get("PUPIL_PRIOR_ROI", "1") != "0"
 
     def __dealloc__(self):
         del self.thisptr
@@ -73,6 +71,14 @@ cdef class Detector2DCore(DetectorBase):
             "final_perimeter_ratio_range_max": 1.2,
             "ellipse_true_support_min_dist": 2.5,
             "support_pixel_ratio_exponent": 2.0,
+            # Max evaluations in the combinatorial contour-combination search.
+            # Bounds the latency tail on fragmented (e.g. blink) frames; the
+            # original value was 1000. See detect_2d.hpp.
+            "combine_evals_max": 100,
+            # Skip coarse detection while tracking is locked on, seeding a tight
+            # ROI from the previous confident result (falls back to coarse when
+            # tracking is lost). Set False for pure random-access detection.
+            "use_prior_roi": True,
         }
 
     # Base interface
@@ -157,7 +163,7 @@ cdef class Detector2DCore(DetectorBase):
         # An explicit caller-supplied roi always overrides this.
         cdef bint prior_mode = False
         cdef double m
-        if roi is None and self._prior_roi and self.properties['coarse_detection'] and self._have_prev:
+        if roi is None and self.properties['use_prior_roi'] and self.properties['coarse_detection'] and self._have_prev:
             m = self._prev_diam * 0.7
             if m < 55.0:
                 m = 55.0
