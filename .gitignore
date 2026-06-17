@@ -411,3 +411,5 @@ bench/__pycache__/
 /.venv-3dvog/
 bench/compare_*/
 bench/tw_*.npy
+bench/_ts_*.npy
+bench/runtime_hist_*.png
