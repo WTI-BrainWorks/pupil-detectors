@@ -51,6 +51,9 @@ private:
 	Ellipse mPrior_ellipse;
 	// reusable per-frame scratch buffers (avoid reallocating image-sized Mats each frame)
 	cv::Mat mPupilImage, mHistogram, mBinaryImg, mSpecMask, mEdges;
+	// temporal pupil-size tracking for the size-consistency confidence gate
+	double mRecentPupilSize;
+	bool mHaveRecentSize;
 };
 
 void printPoints(std::vector<cv::Point> points)
@@ -59,7 +62,7 @@ void printPoints(std::vector<cv::Point> points)
 				  { std::cout << p << std::endl; });
 }
 
-Detector2D::Detector2D() : mUse_strong_prior(false), mPupil_Size(100)
+Detector2D::Detector2D() : mUse_strong_prior(false), mPupil_Size(100), mRecentPupilSize(0.0), mHaveRecentSize(false)
 {
 	// The detector works on small per-frame ROIs. OpenCV's internal thread-pool
 	// dispatch (PPL on the Windows prebuilt) costs far more than the parallelism
@@ -92,6 +95,28 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	result->current_roi = roi;
 	result->image_width = image.size().width;
 	result->image_height = image.size().height;
+
+	// Temporal size-consistency confidence gate. A real pupil cannot change
+	// diameter by a large fraction between adjacent video frames; a detection
+	// much smaller (or larger) than the recent stable size is most likely
+	// spurious (the detector latching onto a glint / eyelash / partial edge,
+	// which otherwise still reports high confidence). Down-weight such frames.
+	auto size_consistency = [this](double diameter) -> double {
+		if (!mHaveRecentSize || mRecentPupilSize <= 1.0 || diameter <= 0.0)
+			return 1.0;
+		const double lo = 0.7, hi = 1.0 / 0.7; // tolerate ~+/-43% frame-to-frame
+		double ratio = diameter / mRecentPupilSize;
+		if (ratio >= lo && ratio <= hi)
+			return 1.0;
+		double r = (ratio < lo) ? (ratio / lo) : (hi / ratio); // in (0,1)
+		return r * r; // smooth quadratic falloff
+	};
+	auto update_recent_size = [this](double diameter, double conf) {
+		if (conf > 0.6 && diameter > 1.0) {
+			if (!mHaveRecentSize) { mRecentPupilSize = diameter; mHaveRecentSize = true; }
+			else mRecentPupilSize = 0.9 * mRecentPupilSize + 0.1 * diameter;
+		}
+	};
 
 	// Reuse image-sized scratch buffers across frames so OpenCV skips the malloc
 	// when the ROI size matches the previous frame. (Each Detector2D is already
@@ -314,6 +339,9 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 				mUse_strong_prior = true;
 				double goodness = std::min(1.0, support_ratio);
 				mPupil_Size = ellipse.major_radius * 2.0;
+				double sp_diameter = ellipse.major_radius * 2.0;
+				goodness *= size_consistency(sp_diameter);
+				update_recent_size(sp_diameter, goodness);
 				result->confidence = goodness;
 				result->ellipse = ellipse;
 
@@ -775,6 +803,9 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	double support_ratio = support_pixels.size() / ellipse_circumference;
 	double goodness = std::min(double(0.99), support_ratio) * pow(support_pixels.size() / final_edges.size(), props.support_pixel_ratio_exponent);
 
+	double final_diameter = result->ellipse.major_radius * 2.0;
+	goodness *= size_consistency(final_diameter);
+	update_recent_size(final_diameter, goodness);
 	result->confidence = goodness;
 	result->ellipse.center[0] += roi.x;
 	result->ellipse.center[1] += roi.y;

@@ -1,10 +1,15 @@
 """Compare the classical pupil_detectors Detector2D against 3DeepVOG's CNN
-pupil segmentation on a handful of frames, and render side-by-side overlays.
+pupil segmentation (an independent "gold standard").
 
-  green  = pupil_detectors (current algorithm)
-  red    = 3DeepVOG (SegResNet pupil segmentation -> ellipse fit)
+Two modes:
+  gold [stride]  -- run 3DeepVOG over the clip, cache ellipse params to disk
+                    (the reference is fixed, so compute it once).
+  eval [tag]     -- run the current pupil_detectors over the clip (sequentially,
+                    so it gets its temporal strong-prior), compare to the cached
+                    gold, print agreement split by clean vs hard/blink frames,
+                    and render overlays (green=pupil_detectors, red=3DeepVOG).
 
-Run in the 3DeepVOG venv (.venv-3dvog), which also has pupil_detectors installed.
+Run in .venv-3dvog (has torch+monai+transformers + the pupil_detectors wheel).
 """
 import os, sys
 os.add_dll_directory(r"c:/tools/opencv/build/x64/vc16/bin")
@@ -13,142 +18,148 @@ sys.path.insert(0, r"c:/Users/adf44/source/python/pupil-detectors/.deps/3deepvog
 
 import numpy as np
 import cv2
-import torch
 from bench import load_frames
-from pupil_detectors import Detector2D
-from threedeepvog.models.deepvog3d_model import Model_3DeepVOG
 
 W, H = 640, 480
-OUT = "bench/compare_frames"
+FRAMES_FILE = os.environ.get("FRAMES_FILE", "bench/frames_2000.raw")
+OUT = os.environ.get("OUT_DIR", "bench/compare_frames")
+GOLD = os.environ.get("GOLD_FILE", "bench/dv_gold.npz")
 os.makedirs(OUT, exist_ok=True)
-
-# frames spread across the clip (varied content)
-FRAME_IDS = [0, 250, 500, 800, 1100, 1500]
-
-frames = load_frames("bench/frames_2000.raw")
+SHOW_IDS = [0, 250, 500, 800, 1100, 1500]  # fixed spread for the visual sheet
 
 
 def fit_pupil_3dvog(prob, thr=0.5):
-    """Fit an ellipse to 3DeepVOG's pupil probability map (channel 0)."""
+    """Fit ellipse to 3DeepVOG pupil prob map (channel 0). Returns cv2 RotatedRect, area."""
     mask = (prob > thr).astype(np.uint8) * 255
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    area = int((mask > 0).sum())
     if not cnts:
-        return None, 0
+        return None, area
     c = max(cnts, key=cv2.contourArea)
-    area = cv2.contourArea(c)
-    if len(c) < 5 or area < 10:
+    if len(c) < 5:
         return None, area
     return cv2.fitEllipse(c), area
 
 
-def main():
+def cmd_gold(stride=1):
+    import torch
+    from threedeepvog.models.deepvog3d_model import Model_3DeepVOG
+    frames = load_frames(FRAMES_FILE)
+    fids = list(range(0, len(frames), stride))
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"device={dev}")
-    model = Model_3DeepVOG(device=dev, model="SegResNet_3in3out",
-                           video_width=W, video_height=H)
-    det = Detector2D()
-
-    # Run pupil_detectors sequentially so it gets its temporal strong-prior
-    # (its real streaming mode); capture the result at each comparison frame.
-    pd_results = {}
-    want = set(FRAME_IDS)
-    for i in range(max(FRAME_IDS) + 1):
-        r = det.detect(frames[i])
-        if i in want:
-            pd_results[i] = r
-
-    rows = []
-    for fid in FRAME_IDS:
-        gray = frames[fid]
-        # --- pupil_detectors (from sequential pass) ---
-        r = pd_results[fid]
-        e = r["ellipse"]
-        pd_center = e["center"]; pd_axes = e["axes"]; pd_angle = e["angle"]
-        pd_conf = r["confidence"]; pd_diam = r["diameter"]
-
-        # --- 3DeepVOG ---
-        x = torch.from_numpy(gray[None].astype(np.float32))  # (1,H,W)
-        segs = model.predict(x)  # (1,H,W,3)
-        pupil_prob = segs[0, :, :, 0].detach().cpu().numpy()
-        dv_ellipse, dv_area = fit_pupil_3dvog(pupil_prob)
-
-        # --- draw ---
-        vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        if pd_conf > 0:
-            cv2.ellipse(vis, tuple(int(v) for v in pd_center),
-                        tuple(int(v / 2) for v in pd_axes), pd_angle, 0, 360, (0, 255, 0), 1)
-            cv2.circle(vis, tuple(int(v) for v in pd_center), 2, (0, 255, 0), -1)
-        if dv_ellipse is not None:
-            cv2.ellipse(vis, dv_ellipse, (0, 0, 255), 1)
-            cv2.circle(vis, tuple(int(v) for v in dv_ellipse[0]), 2, (0, 0, 255), -1)
-
-        dv_center = dv_ellipse[0] if dv_ellipse else (np.nan, np.nan)
-        dv_diam = max(dv_ellipse[1]) if dv_ellipse else np.nan
-        dcx = (pd_center[0] - dv_center[0]) if dv_ellipse and pd_conf > 0 else np.nan
-        dcy = (pd_center[1] - dv_center[1]) if dv_ellipse and pd_conf > 0 else np.nan
-        ddist = float(np.hypot(dcx, dcy)) if dv_ellipse and pd_conf > 0 else np.nan
-
-        cv2.putText(vis, "green=pupil_detectors  red=3DeepVOG", (8, 18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-        cv2.putText(vis, f"frame {fid}", (8, H - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
-        path = f"{OUT}/frame_{fid:04d}.png"
-        cv2.imwrite(path, vis)
-
-        rows.append((fid, pd_center, pd_diam, pd_conf, dv_center, dv_diam, ddist))
-        print(f"frame {fid:4d}: PD center=({pd_center[0]:.1f},{pd_center[1]:.1f}) "
-              f"diam={pd_diam:.1f} conf={pd_conf:.2f} | "
-              f"3DVOG center=({dv_center[0]:.1f},{dv_center[1]:.1f}) diam={dv_diam:.1f} "
-              f"| center dist={ddist:.1f}px -> {path}")
-
-    # composite contact sheet (2 cols x 3 rows)
-    imgs = [cv2.imread(f"{OUT}/frame_{fid:04d}.png") for fid in FRAME_IDS]
-    rowsimg = [np.hstack(imgs[i:i + 2]) for i in range(0, len(imgs), 2)]
-    sheet = np.vstack(rowsimg)
-    cv2.imwrite(f"{OUT}/contact_sheet.png", sheet)
-    print(f"\ncontact sheet -> {OUT}/contact_sheet.png")
-
-    # --- aggregate agreement vs gold standard (the yardstick for algorithm changes) ---
-    n_total = len(frames)
-    sample = list(range(0, min(1800, n_total), 12))
-    sset = set(sample)
-    pd_cap = {}
-    det2 = Detector2D()
-    for i in range(max(sample) + 1):
-        rr = det2.detect(frames[i])
-        if i in sset:
-            pd_cap[i] = rr
-    # 3DeepVOG batched
-    dv = {}
+    print(f"[gold] device={dev}, {len(fids)} frames")
+    model = Model_3DeepVOG(device=dev, model="SegResNet_3in3out", video_width=W, video_height=H)
+    cx = np.full(len(fids), np.nan); cy = np.full(len(fids), np.nan)
+    MA = np.full(len(fids), np.nan); ma = np.full(len(fids), np.nan)
+    ang = np.full(len(fids), np.nan); area = np.zeros(len(fids)); valid = np.zeros(len(fids), bool)
     B = 16
-    for s in range(0, len(sample), B):
-        batch_ids = sample[s:s + B]
-        x = torch.from_numpy(frames[batch_ids].astype(np.float32))
+    import time; t0 = time.perf_counter()
+    for s in range(0, len(fids), B):
+        bids = fids[s:s + B]
+        x = torch.from_numpy(frames[bids].astype(np.float32))
         segs = model.predict(x)
-        for k, fid in enumerate(batch_ids):
-            el, _ = fit_pupil_3dvog(segs[k, :, :, 0].detach().cpu().numpy())
-            dv[fid] = el
+        for k, fid in enumerate(bids):
+            el, a = fit_pupil_3dvog(segs[k, :, :, 0].detach().cpu().numpy())
+            j = s + k; area[j] = a
+            if el is not None:
+                (ex, ey), (eMA, ema), eang = el
+                cx[j], cy[j], MA[j], ma[j], ang[j], valid[j] = ex, ey, eMA, ema, eang, True
+        if s % (B * 16) == 0:
+            print(f"  {s}/{len(fids)}  ({(time.perf_counter()-t0):.0f}s)", flush=True)
+    np.savez(GOLD, fids=np.array(fids), cx=cx, cy=cy, MA=MA, ma=ma, ang=ang, area=area, valid=valid)
+    print(f"[gold] saved {GOLD} in {time.perf_counter()-t0:.0f}s; 3DeepVOG valid {valid.sum()}/{len(fids)}")
 
-    dists, ddiam = [], []
-    pd_det = dvog_det = both = 0
-    for fid in sample:
-        r = pd_cap[fid]; el = dv[fid]
-        pdok = r["confidence"] > 0; dvok = el is not None
-        pd_det += pdok; dvog_det += dvok
-        if pdok and dvok:
-            both += 1
-            pc = r["ellipse"]["center"]
-            dists.append(float(np.hypot(pc[0] - el[0][0], pc[1] - el[0][1])))
-            ddiam.append(abs(r["diameter"] - max(el[1])))
-    dists = np.array(dists); ddiam = np.array(ddiam)
-    print(f"\n=== AGREEMENT vs 3DeepVOG over {len(sample)} frames (baseline yardstick) ===")
-    print(f"detection rate: pupil_detectors {pd_det}/{len(sample)} ({100*pd_det/len(sample):.1f}%), "
-          f"3DeepVOG {dvog_det}/{len(sample)} ({100*dvog_det/len(sample):.1f}%), both {both}")
-    print(f"center distance (px): mean={dists.mean():.3f} median={np.median(dists):.3f} "
-          f"p90={np.percentile(dists,90):.3f} max={dists.max():.3f}")
-    print(f"diameter |diff| (px): mean={ddiam.mean():.3f} median={np.median(ddiam):.3f} "
-          f"p90={np.percentile(ddiam,90):.3f}")
+
+def cmd_eval(tag="current"):
+    from pupil_detectors import Detector2D
+    g = np.load(GOLD)
+    fids = g["fids"]; gvalid = g["valid"]; gcx = g["cx"]; gcy = g["cy"]
+    gdiam = np.maximum(g["MA"], g["ma"]); garea = g["area"]
+    frames = load_frames(FRAMES_FILE)
+    fidset = {int(f): i for i, f in enumerate(fids)}
+
+    # sequential pass -> capture PD result at sampled frames (keep strong-prior)
+    det = Detector2D()
+    pconf = np.zeros(len(fids)); pcx = np.full(len(fids), np.nan); pcy = np.full(len(fids), np.nan)
+    pdiam = np.full(len(fids), np.nan)
+    for i in range(int(fids.max()) + 1):
+        r = det.detect(frames[i])
+        j = fidset.get(i)
+        if j is not None:
+            pconf[j] = r["confidence"]; pdiam[j] = r["diameter"]
+            pcx[j], pcy[j] = r["ellipse"]["center"]
+
+    conf_thr = float(os.environ.get("CONF_THR", "0"))
+    pdet = pconf > conf_thr
+    both = pdet & gvalid
+    dist = np.hypot(pcx - gcx, pcy - gcy)
+    ddiam = np.abs(pdiam - gdiam)
+
+    # "hard" = blink-ish (3DeepVOG pupil area well below median) or either detector missing
+    med_area = np.median(garea[garea > 0])
+    blinkish = garea < 0.5 * med_area
+    hard = blinkish | (~pdet) | (~gvalid)
+    clean = both & (~hard)
+
+    def stats(mask):
+        m = mask & both
+        d = dist[m]; dd = ddiam[m]
+        if d.size == 0:
+            return "  (no frames)"
+        return (f"n={m.sum():4d}  center px: mean={d.mean():.3f} median={np.median(d):.3f} "
+                f"p90={np.percentile(d,90):.3f} max={d.max():.3f} | diam |d|: mean={dd.mean():.3f}")
+
+    print(f"\n=== [{tag}] agreement vs 3DeepVOG over {len(fids)} frames (conf>{conf_thr}) ===")
+    print(f"detection: pupil_detectors {pdet.sum()}/{len(fids)} ({100*pdet.mean():.1f}%), "
+          f"3DeepVOG {gvalid.sum()}/{len(fids)} ({100*gvalid.mean():.1f}%), both {both.sum()}")
+    print(f"blink-ish frames (3DVOG area < 0.5*median): {blinkish.sum()}")
+    print(f"  PD misses on blink-ish: {(blinkish & ~pdet).sum()}/{blinkish.sum()};  "
+          f"3DVOG invalid on blink-ish: {(blinkish & ~gvalid).sum()}/{blinkish.sum()}")
+    print(f"ALL  (both detect): {stats(np.ones(len(fids), bool))}")
+    print(f"CLEAN              : {stats(clean)}")
+    print(f"HARD/blink         : {stats(hard)}")
+    print(f"disagreements >3px : {((dist > 3) & both).sum()}")
+
+    # ---- render: fixed spread + hard cases ----
+    def draw(fid):
+        j = fidset[fid]
+        vis = cv2.cvtColor(frames[fid], cv2.COLOR_GRAY2BGR)
+        det2 = Detector2D()
+        for k in range(max(0, fid - 30), fid + 1):  # short warm-up for a faithful single-frame draw
+            rr = det2.detect(frames[k])
+        if rr["confidence"] > 0:
+            e = rr["ellipse"]
+            cv2.ellipse(vis, tuple(int(v) for v in e["center"]),
+                        tuple(int(v / 2) for v in e["axes"]), e["angle"], 0, 360, (0, 255, 0), 1)
+        if gvalid[j]:
+            cv2.ellipse(vis, ((float(gcx[j]), float(gcy[j])), (float(g["MA"][j]), float(g["ma"][j])),
+                              float(g["ang"][j])), (0, 0, 255), 1)
+        tag2 = "blink" if blinkish[j] else ("PD-miss" if not pdet[j] else f"d={dist[j]:.1f}px")
+        cv2.putText(vis, f"f{fid} {tag2}", (8, H - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        cv2.putText(vis, "green=PD red=3DVOG", (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        return vis
+
+    def sheet(ids, name):
+        ids = [i for i in ids if i in fidset]
+        if not ids:
+            return
+        imgs = [draw(i) for i in ids]
+        while len(imgs) % 2: imgs.append(np.zeros_like(imgs[0]))
+        rows = [np.hstack(imgs[i:i + 2]) for i in range(0, len(imgs), 2)]
+        cv2.imwrite(f"{OUT}/{name}", np.vstack(rows))
+        print(f"  -> {OUT}/{name}  ({ids})")
+
+    sheet(SHOW_IDS, "contact_sheet.png")
+    # hardest cases: blink frames + biggest disagreements
+    hard_ids = list(np.array(fids)[blinkish][:6])
+    div = np.array(fids)[both]; divd = dist[both]
+    hard_ids += list(div[np.argsort(-divd)[:6]])
+    sheet(sorted(set(int(i) for i in hard_ids)), "hard_cases.png")
 
 
 if __name__ == "__main__":
-    main()
+    mode = sys.argv[1] if len(sys.argv) > 1 else "eval"
+    if mode == "gold":
+        cmd_gold(int(sys.argv[2]) if len(sys.argv) > 2 else 1)
+    else:
+        cmd_eval(sys.argv[2] if len(sys.argv) > 2 else "current")
