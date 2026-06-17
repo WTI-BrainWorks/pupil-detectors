@@ -404,3 +404,4 @@ bench/*.svg
 bench/*.folded
 bench/wheels/
 bench/__pycache__/
+/.venv-pypi/

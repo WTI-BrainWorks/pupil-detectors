@@ -4,9 +4,11 @@ times to control for machine drift. Reports median-of-run-medians per build.
 import subprocess, sys, re, statistics, os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# REF = reference (.venv-bench), CAND = optimized build (.venv)
-REF_PY = os.path.join(ROOT, ".venv-bench", "Scripts", "python.exe")
-CAND_PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
+# REF / CAND venv names can be overridden via env (default: reference vs optimized)
+REF_VENV = os.environ.get("REF_VENV", ".venv-bench")
+CAND_VENV = os.environ.get("CAND_VENV", ".venv")
+REF_PY = os.path.join(ROOT, REF_VENV, "Scripts", "python.exe")
+CAND_PY = os.path.join(ROOT, CAND_VENV, "Scripts", "python.exe")
 N_ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 
 # A short timing-only run script fed via stdin.
