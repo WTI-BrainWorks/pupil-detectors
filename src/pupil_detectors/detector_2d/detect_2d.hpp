@@ -168,7 +168,15 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 
 	// Structuring elements are constant across frames, so build them once.
 	static const cv::Mat kernel_7x7 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {7, 7});
-	static const cv::Mat kernel_9x9 = cv::getStructuringElement(cv::MORPH_ELLIPSE, {9, 9});
+	// MORPH_OPEN (eyelash removal). The original 9x9 was oversized now that a
+	// Gaussian denoise + the dark-mask filtering precede edge detection: vs the
+	// 3DeepVOG gold standard a 5x5 ellipse is faster with equal-or-better
+	// detection and center agreement on both clean and blink footage. Kept
+	// configurable: PUPIL_OPEN_K sets the size (0 disables), PUPIL_OPEN_RECT=1
+	// uses a separable rectangular kernel.
+	static const int open_k = []() { const char *e = std::getenv("PUPIL_OPEN_K"); return e ? std::atoi(e) : 5; }();
+	static const int open_shape = []() { const char *e = std::getenv("PUPIL_OPEN_RECT"); return (e && std::string(e) == "1") ? cv::MORPH_RECT : cv::MORPH_ELLIPSE; }();
+	static const cv::Mat open_kernel = open_k > 0 ? cv::getStructuringElement(open_shape, {open_k, open_k}) : cv::Mat();
 
 	// create dark and spectral glint masks (binary_img / spec_mask are reusable buffers declared above)
 	cv::inRange(pupil_image, cv::Scalar(0), cv::Scalar(lowest_spike_index + props.intensity_range), binary_img); // binary threshold
@@ -180,7 +188,8 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 	// printf("spec_count=%f ", spec_ratio);
 
 	// open operation to remove eye lashes
-	cv::morphologyEx(pupil_image, pupil_image, cv::MORPH_OPEN, kernel_9x9);
+	if (open_k > 0)
+		cv::morphologyEx(pupil_image, pupil_image, cv::MORPH_OPEN, open_kernel);
 
 	// Denoise before edge detection. A separable Gaussian is ~1.3x faster than
 	// medianBlur(5) here (median was the single most expensive preprocessing op),
