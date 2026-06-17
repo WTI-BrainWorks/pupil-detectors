@@ -441,6 +441,14 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 		// threshold the unmodified ROI (pupil_image has been opened/blurred)
 		cv::inRange(image(roi), cv::Scalar(0), cv::Scalar(lowest_spike_index + props.intensity_range), dark);
 		cv::morphologyEx(dark, dark, cv::MORPH_CLOSE, kernel_open_5x5); // bridge the glint hole
+		// cheap pupil-area bounds (bail before the contour/fit/support work when
+		// there is clearly no pupil-sized dark region -- the blink case -- which
+		// is what was inflating the latency tail on give-up frames).
+		const double r_min = props.pupil_size_min * 0.5, r_max = props.pupil_size_max * 0.5;
+		const double area_min = CV_PI * r_min * r_min * 0.5;       // generous lower
+		const double area_max = CV_PI * r_max * r_max * 4.0;       // generous upper
+		if (cv::countNonZero(dark) < area_min)
+			return false;
 		std::vector<std::vector<cv::Point>> blob_contours;
 		cv::findContours(dark, blob_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_NONE);
 		if (blob_contours.empty())
@@ -448,8 +456,9 @@ std::shared_ptr<Detector2DResult> Detector2D::detect(Detector2DProperties &props
 		auto &best = *std::max_element(blob_contours.begin(), blob_contours.end(),
 									   [](const std::vector<cv::Point> &a, const std::vector<cv::Point> &b)
 									   { return cv::contourArea(a) < cv::contourArea(b); });
-		if (best.size() < 5)
-			return false;
+		double best_area = cv::contourArea(best);
+		if (best.size() < 5 || best_area < area_min || best_area > area_max)
+			return false; // largest dark blob is not pupil-sized
 		cv::RotatedRect rr = cv::fitEllipse(best);
 		if (!is_Ellipse(rr))
 			return false;
