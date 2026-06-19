@@ -3,6 +3,10 @@
 Loads pre-extracted grayscale frames (raw uint8, 640x480) and runs the 2D
 detector over them, recording per-frame timing and detection results.
 
+The frame clips are extracted from the shared sample video, which now lives at
+the pupil-pkgs top level (../../sample_data/eye1.mp4, shared with the pye3d
+benchmark); regenerate them with extract_frames.py.
+
 Usage:
     python bench/bench.py run   --tag reference --frames bench/frames_2000.raw
     python bench/bench.py run   --tag candidate --frames bench/frames_2000.raw
