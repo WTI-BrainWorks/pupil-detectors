@@ -112,7 +112,10 @@ before-all = ["yum install -y eigen3-devel", "bash scripts/manylinux-before-all.
 repair-wheel-command = "auditwheel repair --strip -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.windows]
-before-all = ["choco install eigen opencv"]
-environment = { OpenCV_DIR="c:/tools/opencv/build" }
+# choco for Eigen, but build a minimal core+imgproc OpenCV from source -- choco's
+# opencv is the ~68MB monolithic opencv_world (every module). Flattened install:
+# OpenCVConfig.cmake -> C:/opencv-min/cmake, DLLs -> C:/opencv-min/bin.
+before-all = ["choco install eigen", "bash scripts/build-opencv-windows.sh"]
+environment = { OpenCV_DIR="C:/opencv-min/cmake" }
 before-build = "pip install delvewheel"
-repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel} --add-path C:/tools/opencv/build/x64/vc16/bin"
+repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel} --add-path C:/opencv-min/bin"
