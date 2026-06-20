@@ -1,15 +1,16 @@
 name: tests
 
 on:
-  pull_request:
   push:
-    branches: [master, main]
+    branches: ["**"]
     tags: ["**"]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Cancel superseded runs on the same branch ref. Tag refs are unique, so
+  # release builds are never cancelled.
+  cancel-in-progress: true
 
 permissions:
   contents: read
