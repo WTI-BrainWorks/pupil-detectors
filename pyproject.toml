@@ -86,8 +86,9 @@ wheel.py-api = "cp311"
 [tool.cibuildwheel]
 archs = ["native"]
 # Python floor (>=3.10) comes from requires-python; cibuildwheel honors it.
-# musllinux is skipped: before-all uses yum (manylinux only), not apk.
-skip = "pp* *-musllinux*"
+# Skip: musllinux (before-all uses yum, not apk) and free-threaded CPython
+# (cp3??t-*, which can't use the stable ABI and lacks test-dep wheels).
+skip = "*-musllinux* cp3??t-*"
 
 build-frontend = "build"
 
@@ -100,6 +101,10 @@ manylinux-x86_64-image = "manylinux2014"
 
 [tool.cibuildwheel.macos]
 before-all = ["brew install eigen opencv"]
+# Homebrew's prefix isn't on CMake's default search path, so find_package can't
+# see the brewed Eigen/OpenCV. Cover Apple-silicon (/opt/homebrew) and Intel
+# (/usr/local) runners.
+environment = { CMAKE_PREFIX_PATH = "/opt/homebrew:/usr/local" }
 
 [tool.cibuildwheel.linux]
 before-all = ["yum install -y eigen3-devel", "bash scripts/manylinux-before-all.sh"]
