@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.21...4.0)
 cmake_policy(SET CMP0076 NEW)
 
 project("pupil_detector_2d"
@@ -31,24 +31,27 @@ if(MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_ENABLE_EXTENDED_ALIGNED_STORAGE")
 endif()
 
-find_package(PythonExtensions REQUIRED)
-find_package(Cython REQUIRED)
-find_package(NumPy REQUIRED)
+# Python, Cython and UseCython are established by the parent CMakeLists before
+# add_subdirectory(); re-running find_package(Cython) here would fail trying to
+# redefine the Cython::Cython imported target. Only the deps unique to this
+# module are resolved here.
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(OpenCV REQUIRED core imgproc) # add highgui to use imshow/waitKey
 
-add_cython_target(detector_2d CXX PY3)
-add_library(detector_2d MODULE ${detector_2d})
-python_extension_module(detector_2d)
+# detector_2d.pyx cimports across the package (..c_types_wrapper, ..coarse_pupil,
+# ..detector_base); -I on the package root lets Cython resolve them.
+cython_transpile(detector_2d.pyx LANGUAGE CXX
+    CYTHON_ARGS -3 -I "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE detector_2d_cxx)
+python_add_library(detector_2d MODULE WITH_SOABI ${_sabi_args}
+    "${detector_2d_cxx}")
 
 target_include_directories(
     detector_2d
     PUBLIC
 
     # external
-    ${NumPy_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
-    ${EIGEN3_INCLUDE_DIRS}
 
     # local
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>
@@ -66,6 +69,6 @@ target_sources(
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/../cpp/singleeyefitter/ImageProcessing/cvx.cpp>
 )
 
-target_link_libraries(detector_2d ${OpenCV_LIBS} ${EIGEN3_LIBS})
+target_link_libraries(detector_2d PRIVATE ${OpenCV_LIBS} Eigen3::Eigen)
 
-install(TARGETS detector_2d LIBRARY DESTINATION "detector_2d")
+install(TARGETS detector_2d DESTINATION "pupil_detectors/detector_2d")

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.21...4.0)
 
 project("pupil_detector_base"
     LANGUAGES C CXX
@@ -30,13 +30,27 @@ if(MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_ENABLE_EXTENDED_ALIGNED_STORAGE")
 endif()
 
-find_package(PythonExtensions REQUIRED)
-find_package(Cython REQUIRED)
+# scikit-build-core provides FindPython; cython-cmake provides UseCython (both
+# pulled in via build-system.requires). No NumPy: the Cython sources use typed
+# memoryviews (buffer protocol), not the numpy C-API.
+find_package(Python REQUIRED COMPONENTS Interpreter Development.Module Development.SABIModule)
+find_package(Cython MODULE REQUIRED VERSION 3.0)
+include(UseCython)
 
-add_cython_target(detector_base CXX PY3)
-add_library(detector_base MODULE ${detector_base})
-python_extension_module(detector_base)
+# scikit-build-core sets SKBUILD_SABI_VERSION (from wheel.py-api) only for abi3
+# builds (CPython 3.11+ here); on 3.10 it is unset and we build a normal
+# version-specific module. USE_SABI then defines Py_LIMITED_API + .abi3 suffix.
+# _sabi_args is inherited by the detector_2d subdirectory.
+if(DEFINED SKBUILD_SABI_VERSION AND NOT SKBUILD_SABI_VERSION STREQUAL "")
+    set(_sabi_args USE_SABI ${SKBUILD_SABI_VERSION})
+else()
+    set(_sabi_args)
+endif()
+
+cython_transpile(detector_base.pyx LANGUAGE CXX CYTHON_ARGS -3
+    OUTPUT_VARIABLE detector_base_cxx)
+python_add_library(detector_base MODULE WITH_SOABI ${_sabi_args}
+    "${detector_base_cxx}")
+install(TARGETS detector_base DESTINATION "pupil_detectors")
 
 add_subdirectory(detector_2d)
-
-install(TARGETS detector_base LIBRARY DESTINATION ".")

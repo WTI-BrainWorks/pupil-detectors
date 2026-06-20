@@ -15,8 +15,8 @@ import cv2
 import numpy as np
 
 from cython.operator cimport dereference as deref
+from libc.math cimport M_PI
 from libcpp.memory cimport shared_ptr
-from numpy.math cimport PI
 
 from ..c_types_wrapper cimport (
     CV_8UC1,
@@ -258,7 +258,7 @@ cdef object result2D_to_dict(Detector2DResult& result):
     data["ellipse"] = {
         "center": (result.ellipse.center[0], result.ellipse.center[1]),
         "axes": (result.ellipse.minor_radius * 2.0, result.ellipse.major_radius * 2.0),
-        "angle": result.ellipse.angle * 180.0 / PI - 90.0
+        "angle": result.ellipse.angle * 180.0 / M_PI - 90.0
     }
     data["diameter"] = max(data["ellipse"]["axes"])
     data["location"] = data["ellipse"]["center"]
