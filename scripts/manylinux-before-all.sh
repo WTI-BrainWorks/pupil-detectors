@@ -20,4 +20,6 @@ cmake -S opencv -B opencv/build \
   -DWITH_OPENCL=OFF -DWITH_FFMPEG=OFF -DWITH_GTK=OFF -DWITH_QT=OFF \
   -DWITH_PROTOBUF=OFF -DWITH_QUIRC=OFF -DWITH_ADE=OFF
 
-cmake --build opencv/build --target install --parallel
+# Cap parallelism (default 2) so the memory-heavy imgproc TUs don't OOM small
+# runners; raise CMAKE_BUILD_PARALLEL_LEVEL for more cores/RAM.
+cmake --build opencv/build --target install --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"

@@ -28,4 +28,6 @@ cmake -S opencv -B opencv/build -A x64 \
   -DWITH_IPP=OFF -DWITH_TBB=OFF -DWITH_OPENMP=OFF -DWITH_FFMPEG=OFF \
   -DWITH_PROTOBUF=OFF -DWITH_QUIRC=OFF -DWITH_ADE=OFF
 
-cmake --build opencv/build --config Release --target install --parallel
+# Cap parallelism (default 2) so memory-heavy TUs don't OOM the runner; raise
+# CMAKE_BUILD_PARALLEL_LEVEL for more cores/RAM.
+cmake --build opencv/build --config Release --target install --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
