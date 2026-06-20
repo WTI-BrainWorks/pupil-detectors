@@ -23,9 +23,9 @@ jobs:
       fail-fast: false
       matrix:
         # ubuntu-latest -> manylinux x86_64, windows-latest -> AMD64,
-        # macos-13 -> x86_64, macos-latest -> arm64. cibuildwheel builds
-        # natively on each runner (archs = "native" in pyproject.toml).
-        os: [ubuntu-latest, windows-latest, macos-13, macos-latest]
+        # macos-latest -> arm64 (Apple Silicon). cibuildwheel builds natively
+        # on each runner (archs = "native" in pyproject.toml).
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
         with:
