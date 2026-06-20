@@ -108,6 +108,8 @@ environment = { CMAKE_PREFIX_PATH = "/opt/homebrew:/usr/local" }
 
 [tool.cibuildwheel.linux]
 before-all = ["yum install -y eigen3-devel", "bash scripts/manylinux-before-all.sh"]
+# Strip symbols from the extension + the bundled OpenCV libs.
+repair-wheel-command = "auditwheel repair --strip -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.windows]
 before-all = ["choco install eigen opencv"]
