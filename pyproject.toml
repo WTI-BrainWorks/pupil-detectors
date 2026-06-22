@@ -13,7 +13,10 @@ description = "Pupil Labs 2D Pupil Detector"
 readme = "README.rst"
 requires-python = ">=3.10"
 license = "MIT"
-license-files = ["COPYING", "COPYING.LESSER"]
+# COPYING/COPYING.LESSER = pupil_detectors' own license; THIRD_PARTY_LICENSES =
+# attribution for the statically-linked OpenCV (Apache-2.0) + zlib. All land in
+# the wheel's *.dist-info/licenses/.
+license-files = ["COPYING", "COPYING.LESSER", "THIRD_PARTY_LICENSES.txt"]
 authors = [{ name = "Pupil Labs GmbH", email = "info@pupil-labs.com" }]
 dynamic = ["version"]
 classifiers = [
@@ -24,7 +27,6 @@ classifiers = [
 ]
 dependencies = [
     "numpy",
-    "opencv-python",
     "cysignals; platform_system != 'Windows'",
 ]
 
@@ -115,10 +117,10 @@ before-all = ["yum install -y eigen3-devel", "bash scripts/manylinux-before-all.
 repair-wheel-command = "auditwheel repair --strip -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.windows]
-# choco for Eigen, but build a minimal core+imgproc OpenCV from source -- choco's
-# opencv is the ~68MB monolithic opencv_world (every module). Flattened install:
-# OpenCVConfig.cmake -> C:/opencv-min/cmake, DLLs -> C:/opencv-min/bin.
+# choco for Eigen, but build a minimal core+imgproc *static* OpenCV from source
+# (choco's opencv is the ~68MB monolithic shared opencv_world). It is linked
+# straight into detector_2d.pyd, so the wheel is self-contained: no bundled DLLs
+# and thus no delvewheel/repair step. Flattened install -> OpenCVConfig.cmake at
+# C:/opencv-min/cmake.
 before-all = ["choco install eigen", "bash scripts/build-opencv-windows.sh"]
 environment = { OpenCV_DIR="C:/opencv-min/cmake", CMAKE_BUILD_PARALLEL_LEVEL = "2" }
-before-build = "pip install delvewheel"
-repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel} --add-path C:/opencv-min/bin"

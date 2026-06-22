@@ -11,7 +11,6 @@ See COPYING and COPYING.LESSER for license details.
 """
 import typing as T
 
-import cv2
 import numpy as np
 
 from cython.operator cimport dereference as deref
@@ -208,7 +207,17 @@ cdef class Detector2DCore(DetectorBase):
         if self.properties['coarse_detection'] and roi.width * roi.height > 320 * 240:
             scale = 2 # half the integral image. boost up integral
             user_roi_image = gray_img[roi.slices]
-            integral = cv2.integral(user_roi_image[::scale,::scale])
+            sub = user_roi_image[::scale, ::scale]
+            # Summed-area table of the down-sampled ROI, fed to center_surround.
+            # Equivalent to cv2.integral (uint8 -> int32, padded with a leading
+            # zero row/column); exact integer sums make it bit-identical. Built as
+            # a plain numpy array (then bound to the typed memoryview) so the
+            # package carries no Python-level OpenCV dependency.
+            integral_arr = np.zeros((sub.shape[0] + 1, sub.shape[1] + 1), dtype=np.int32)
+            integral_arr[1:, 1:] = np.cumsum(
+                np.cumsum(sub, axis=0, dtype=np.int32), axis=1, dtype=np.int32
+            )
+            integral = integral_arr
             coarse_filter_max = self.properties['coarse_filter_max']
             coarse_filter_min = self.properties['coarse_filter_min']
             bounding_box, good_ones, bad_ones = center_surround(
@@ -216,20 +225,8 @@ cdef class Detector2DCore(DetectorBase):
                 coarse_filter_min / scale,
                 coarse_filter_max / scale
             )
-
-            if should_visualize:
-                # # draw the candidates
-                for v in good_ones:
-                    p_x, p_y, w, response = v
-                    x = p_x * scale + roi.x_min
-                    y = p_y * scale + roi.y_min
-                    width = w*scale
-                    cv2.rectangle(
-                        color_img,
-                        (x, y),
-                        (x + width, y + width),
-                        (255, 255, 0)
-                    )
+            # (Coarse-candidate debug overlay removed with the cv2 dependency; the
+            # C++ detector still renders its own debug_image when enabled.)
 
             x1, y1, x2, y2 = bounding_box
             width = x2 - x1
