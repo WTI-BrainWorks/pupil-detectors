@@ -23,6 +23,8 @@ cmake -S opencv -B opencv/build \
   -DBUILD_LIST=core,imgproc \
   -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_C_FLAGS="-ffunction-sections -fdata-sections" \
+  -DCMAKE_CXX_FLAGS="-ffunction-sections -fdata-sections" \
   -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF \
   -DBUILD_opencv_apps=OFF -DBUILD_opencv_python3=OFF -DBUILD_JAVA=OFF \
   -DWITH_IPP=OFF -DWITH_TBB=OFF -DWITH_OPENMP=OFF -DWITH_ITT=OFF \

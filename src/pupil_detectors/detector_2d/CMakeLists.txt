@@ -71,4 +71,15 @@ target_sources(
 
 target_link_libraries(detector_2d PRIVATE ${OpenCV_LIBS} Eigen3::Eigen)
 
+# Function-level dead-code elimination when statically linking OpenCV (Linux).
+# GNU ld otherwise pulls whole object files from the static archives (it has no
+# per-function stripping like MSVC's default /OPT:REF), roughly doubling the
+# .so. Pairing per-function/data sections with --gc-sections drops the
+# unreferenced OpenCV code. Linux-only: MSVC already strips, and macOS links a
+# dynamic OpenCV with ld64 (which uses -dead_strip, not --gc-sections).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_options(detector_2d PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(detector_2d PRIVATE -Wl,--gc-sections)
+endif()
+
 install(TARGETS detector_2d DESTINATION "pupil_detectors/detector_2d")
