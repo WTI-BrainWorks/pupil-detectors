@@ -27,7 +27,13 @@ cmake -S opencv -B opencv/build \
   -DBUILD_opencv_apps=OFF -DBUILD_opencv_python3=OFF -DBUILD_JAVA=OFF \
   -DWITH_IPP=OFF -DWITH_TBB=OFF -DWITH_OPENMP=OFF -DWITH_ITT=OFF \
   -DWITH_OPENCL=OFF -DWITH_FFMPEG=OFF -DWITH_GTK=OFF -DWITH_QT=OFF \
-  -DWITH_PROTOBUF=OFF -DWITH_QUIRC=OFF -DWITH_ADE=OFF
+  -DWITH_PROTOBUF=OFF -DWITH_QUIRC=OFF -DWITH_ADE=OFF \
+  -DWITH_TIFF=OFF -DWITH_JPEG=OFF -DWITH_PNG=OFF -DWITH_WEBP=OFF \
+  -DWITH_OPENEXR=OFF -DWITH_JASPER=OFF -DWITH_OPENJPEG=OFF
+  # ^ no imgcodecs in BUILD_LIST, so these image-format 3rd-party libs are
+  #   unused; OFF avoids OpenCV exporting a static 3rd-party (e.g. liblibtiff.a)
+  #   in OpenCVModules.cmake that isn't installed -> "references file ... does
+  #   not exist" at the consumer's find_package.
 
 # Cap parallelism (default 2) so the memory-heavy imgproc TUs don't OOM small
 # runners; raise CMAKE_BUILD_PARALLEL_LEVEL for more cores/RAM.

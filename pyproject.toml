@@ -83,6 +83,13 @@ provider = "scikit_build_core.metadata.setuptools_scm"
 if.python-version = ">=3.11"
 wheel.py-api = "cp311"
 
+# Windows links a STATIC OpenCV (built by scripts/build-opencv-windows.sh). Its
+# OpenCVConfig.cmake is a "Windows pack" dispatcher that only searches the
+# staticlib/ subdir when OpenCV_STATIC is ON, so force it here.
+[[tool.scikit-build.overrides]]
+if.platform-system = "win32"
+cmake.define.OpenCV_STATIC = "ON"
+
 [tool.setuptools_scm]
 
 [tool.cibuildwheel]
@@ -124,6 +131,8 @@ repair-wheel-command = "auditwheel repair --strip -w {dest_dir} {wheel}"
 # and thus no delvewheel/repair step. Flattened install -> OpenCVConfig.cmake at
 # C:/opencv-min/cmake.
 before-all = ["choco install eigen", "bash scripts/build-opencv-windows.sh"]
-# Point at the leaf static config (default install layout). vc17 = VS2022 on
-# windows-latest; bump if the runner image changes its toolset.
-environment = { OpenCV_DIR="C:/opencv-min/x64/vc17/staticlib", CMAKE_BUILD_PARALLEL_LEVEL = "2" }
+# Point at the OpenCV install ROOT; its OpenCVConfig.cmake auto-detects the
+# arch/runtime (x64/vcNN) subdir, so this is toolset-agnostic (no hardcoded vc17).
+# That dispatcher only searches the staticlib/ leaf when OpenCV_STATIC is ON,
+# which we set via the win32 scikit-build override below.
+environment = { OpenCV_DIR="C:/opencv-min", CMAKE_BUILD_PARALLEL_LEVEL = "2" }
