@@ -11,9 +11,13 @@
 #   BUILD_SHARED_LIBS=OFF      -> static .lib archives instead of DLLs
 #   BUILD_WITH_STATIC_CRT=OFF  -> /MD dynamic CRT, matching the Python extension
 #                                 (mixing /MT here would clash with Python's /MD)
-# Install layout is flattened (cmake/, lib/) so OpenCV_DIR=C:/opencv-min/cmake
-# doesn't depend on the MSVC "vc1x" folder name. Generator left unset so CMake
-# uses whichever Visual Studio the runner has (same toolset as the extension).
+# Use the DEFAULT install layout (x64/vc<NN>/staticlib) and point OpenCV_DIR
+# (set in pyproject) straight at that leaf static config. Do NOT flatten the
+# install: the flattened top-level OpenCVConfig.cmake is a "Windows pack"
+# dispatcher that auto-detects shared libs and fails for a static build
+# ("no binaries compatible with your configuration"). The leaf config knows it
+# is static and links correctly. Generator left unset so CMake uses whichever
+# Visual Studio the runner has (vc17 on windows-latest / VS2022).
 set -eux
 
 OPENCV_VERSION=4.13.0
@@ -26,9 +30,6 @@ cmake -S opencv -B opencv/build -A x64 \
   -DBUILD_LIST=core,imgproc \
   -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_WITH_STATIC_CRT=OFF \
-  -DOPENCV_LIB_INSTALL_PATH=lib \
-  -DOPENCV_3P_LIB_INSTALL_PATH=lib \
-  -DOPENCV_CONFIG_INSTALL_PATH=cmake \
   -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF \
   -DBUILD_opencv_apps=OFF -DBUILD_opencv_python3=OFF -DBUILD_JAVA=OFF \
   -DWITH_IPP=OFF -DWITH_TBB=OFF -DWITH_OPENMP=OFF -DWITH_FFMPEG=OFF \

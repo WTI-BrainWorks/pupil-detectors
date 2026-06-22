@@ -113,7 +113,8 @@ environment = { CMAKE_PREFIX_PATH = "/opt/homebrew:/usr/local", CMAKE_BUILD_PARA
 
 [tool.cibuildwheel.linux]
 before-all = ["yum install -y eigen3-devel", "bash scripts/manylinux-before-all.sh"]
-# Strip symbols from the extension + the bundled OpenCV libs.
+# OpenCV is statically linked into the extension, so there is nothing to bundle;
+# auditwheel just applies the manylinux tag and strips the extension's symbols.
 repair-wheel-command = "auditwheel repair --strip -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.windows]
@@ -123,4 +124,6 @@ repair-wheel-command = "auditwheel repair --strip -w {dest_dir} {wheel}"
 # and thus no delvewheel/repair step. Flattened install -> OpenCVConfig.cmake at
 # C:/opencv-min/cmake.
 before-all = ["choco install eigen", "bash scripts/build-opencv-windows.sh"]
-environment = { OpenCV_DIR="C:/opencv-min/cmake", CMAKE_BUILD_PARALLEL_LEVEL = "2" }
+# Point at the leaf static config (default install layout). vc17 = VS2022 on
+# windows-latest; bump if the runner image changes its toolset.
+environment = { OpenCV_DIR="C:/opencv-min/x64/vc17/staticlib", CMAKE_BUILD_PARALLEL_LEVEL = "2" }
